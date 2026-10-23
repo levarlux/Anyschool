@@ -11,7 +11,22 @@ dotenv.config({ path: resolve(__dirname, '..', '.env') });
 
 // WebSocket pool — persistent connections, no HTTP overhead per query.
 // This fixes the 30s learners list timeout caused by Neon HTTP's stateless model.
-const pool = new Pool({ connectionString: process.env.DATABASE_URL! });
+//
+// Resilience: Neon scales to zero when idle, so the first query after an idle
+// window can take a few seconds. connectionTimeoutMillis bounds that wait and
+// the caller can retry, instead of hanging a request indefinitely; idleTimeout
+// reaps unused sockets; pool.on('error') catches connections Neon drops
+// server-side so one bad client can't take the process down.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL!,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 15_000,
+});
+
+pool.on('error', (error) => {
+  console.error('[db] idle client error (connection dropped by Neon?):', error.message);
+});
 
 export const db = drizzle(pool, { schema });
 
@@ -23,4 +38,9 @@ export const db = drizzle(pool, { schema });
 export async function rawQuery(queryText: string, params?: any[]): Promise<any[]> {
   const result = await pool.query(queryText, params || []);
   return result.rows;
+}
+
+/** Close the pool cleanly on SIGTERM/SIGINT so in-flight queries can finish. */
+export async function closeDb(): Promise<void> {
+  await pool.end();
 }

@@ -28,6 +28,7 @@ import assessments from './routes/assessments';
 import auth from './routes/auth';
 import { runMigrations } from './migrate';
 import { clerkAuth } from './auth';
+import { closeDb } from './db';
 import { paystackMode } from './lib/paystack';
 
 config({ path: resolve(import.meta.dirname, '..', '.env') });
@@ -37,11 +38,46 @@ console.log(`[payments] Paystack mode: ${paystackMode().toUpperCase()} (key: ${p
 
 const app = new Hono();
 
+// ---- CORS ------------------------------------------------------------------
+// The desktop client is a Tauri WebView: its Origin is tauri://localhost
+// (WebKit/macOS/Linux) or https://tauri.localhost (WebView2/Windows). Local
+// dev adds http://localhost:<port>. Everything else must be opted in via
+// WEB_ORIGIN / CORS_ORIGINS. Note: CORS is a browser policy, not access
+// control — Clerk auth and the Paystack signature are the real guards.
+const TAURI_ORIGINS = new Set(['tauri://localhost', 'https://tauri.localhost']);
+const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
+
+function configuredOrigins(): string[] {
+  return [process.env.WEB_ORIGIN, ...(process.env.CORS_ORIGINS?.split(',') ?? [])]
+    .map((origin) => origin?.trim())
+    .filter((origin): origin is string => Boolean(origin));
+}
+
+function allowOrigin(origin: string): string | null {
+  if (!origin) return null; // server-to-server calls (Paystack webhooks) send no Origin
+  if (TAURI_ORIGINS.has(origin)) return origin;
+  if (LOCAL_ORIGIN.test(origin)) return origin;
+  return configuredOrigins().includes(origin) ? origin : null;
+}
+
 // Middleware
 app.use('*', logger());
-app.use('*', cors());
+app.use(
+  '*',
+  cors({
+    origin: allowOrigin,
+    allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+  })
+);
 
-// Health check
+// Health check — public, no auth (Coolify container healthcheck, uptime
+// monitors and the OCI keep-alive ping all hit this every few seconds).
+app.get('/health', (c) => {
+  return c.json({ status: 'ok', uptime: process.uptime(), time: new Date().toISOString() });
+});
+
 app.get('/', (c) => {
   return c.json({ message: 'AnySchool API is running' });
 });
@@ -71,13 +107,84 @@ app.route('/api/subjects', subjects);
 app.route('/api/terms', terms);
 app.route('/api/assessments', assessments);
 
-const port = 3000;
+const port = Number(process.env.PORT) || 3000;
 
-// Run migrations before starting server
-runMigrations(process.env.DATABASE_URL!).then(() => {
-  console.log(`Server running on port ${port}`);
-  serve({
-    fetch: app.fetch,
-    port,
+// Neon can be slow to answer right after an idle scale-down — retry the boot
+// migrations with backoff instead of crashing (Coolify would restart-loop).
+async function migrateWithRetry(databaseUrl: string | undefined, attempts = 5): Promise<void> {
+  if (!databaseUrl) throw new Error('DATABASE_URL is not set');
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await runMigrations(databaseUrl);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      const delayMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+      console.warn(`[boot] migration attempt ${attempt}/${attempts} failed — retrying in ${delayMs}ms`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+async function start(): Promise<void> {
+  try {
+    await migrateWithRetry(process.env.DATABASE_URL);
+  } catch (error) {
+    console.error('[boot] migrations failed:', error);
+    process.exit(1);
+  }
+
+  const server = serve(
+    {
+      fetch: app.fetch,
+      port,
+      hostname: '0.0.0.0', // reachable inside the container / OCI network
+    },
+    (info) => {
+      console.log(`Server running on port ${info.port}`);
+    }
+  );
+
+  // Graceful shutdown: Coolify sends SIGTERM on redeploy/restart. Stop
+  // accepting connections, let in-flight requests finish, close the Neon
+  // pool, then exit — all inside Coolify's 10s grace period.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] ${signal} received — closing server and DB pool`);
+
+    const forceExit = setTimeout(() => {
+      console.error('[shutdown] timed out after 10s — forcing exit');
+      process.exit(1);
+    }, 10_000);
+    forceExit.unref();
+
+    // Node http.Server API not present on hono's ServerType — available since Node 18.2.
+    (server as unknown as { closeIdleConnections?: () => void }).closeIdleConnections?.();
+    server.close(async (closeError) => {
+      try {
+        await closeDb();
+      } catch (dbError) {
+        console.error('[shutdown] error closing DB pool:', dbError);
+      }
+      console.log('[shutdown] clean exit');
+      process.exit(closeError ? 1 : 0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason);
   });
-});
+  process.on('uncaughtException', (error) => {
+    console.error('[uncaughtException]', error);
+    shutdown('uncaughtException');
+  });
+}
+
+start();
