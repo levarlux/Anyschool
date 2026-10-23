@@ -1,0 +1,20 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for AnySchool",
+  "main": "src/types.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
+    "@neondatabase/serverless": "^0.9.0",
+    "drizzle-orm": "^0.32.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

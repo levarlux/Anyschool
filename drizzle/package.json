@@ -1,0 +1,22 @@
+{
+  "name": "drizzle",
+  "version": "1.0.0",
+  "description": "Database schema and migrations for AnySchool",
+  "main": "index.js",
+  "scripts": {
+    "db:generate": "drizzle-kit generate --config=drizzle.config.js",
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.js",
+    "db:push": "drizzle-kit push --config=drizzle.config.js",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.js"
+  },
+  "keywords": [],
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.32.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.23.2",
+    "typescript": "^5.5.0"
+  }
+}

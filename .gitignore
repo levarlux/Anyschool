@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+Cargo.lock
+src-tauri/target/
+
+# Project-scoped MCP config — contains the Paystack test secret key
+.mcp.json

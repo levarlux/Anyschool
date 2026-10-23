@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui/tauri/refs/heads/main/crates/tauri-cli/schema.json",
+  "productName": "AnySchool",
+  "version": "0.1.0",
+  "identifier": "com.anyschool.app",
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix web -- --port 5174",
+    "devUrl": "http://localhost:5174",
+    "beforeBuildCommand": "npm run build --prefix web",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
